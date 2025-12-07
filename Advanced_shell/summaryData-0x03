@@ -1,1 +1,86 @@
+#!/bin/bash
+
+# Task 3: Summarize Pokémon Data into a CSV report
+
+INPUT_DIR="pokemon_data"
+CSV_FILE="pokemon_report.csv"
+
+# Header for CSV
+echo "Name,Height (m),Weight (kg)" > "$CSV_FILE"
+
+# Temp file for calculations
+TEMP_DATA="temp_values.txt"
+: > "$TEMP_DATA"
+
+# Loop through all JSON files
+for file in "$INPUT_DIR"/*.json; do
+    # Extract fields with jq
+    name=$(jq -r '.name' "$file" | sed 's/.*/\u&/')
+    raw_height=$(jq -r '.height' "$file")
+    raw_weight=$(jq -r '.weight' "$file")
+
+    # Convert units using awk:
+    # height (dm → meters), weight (hg → kg)
+    height_m=$(awk -v h="$raw_height" 'BEGIN { printf "%.1f", h/10 }')
+    weight_kg=$(awk -v w="$raw_weight" 'BEGIN { printf "%.1f", w/10 }')
+
+    # Append to CSV
+    echo "$name,$height_m,$weight_kg" >> "$CSV_FILE"
+
+    # Store values for average calculations
+    echo "$height_m $weight_kg" >> "$TEMP_DATA"
+done
+
+echo
+echo "CSV Report generated at: $CSV_FILE"
+echo
+
+# Display the CSV content nicely
+cat "$CSV_FILE"
+echo
+
+# Compute averages using awk
+awk '
+{
+    total_height += $1
+    total_weight += $2
+    count += 1
+}
+END {
+    printf "\nAverage Height: %.2f m\n", total_height/count
+    printf "Average Weight: %.2f kg\n", total_weight/count
+}' "$TEMP_DATA"
+
+# Cleanup
+rm "$TEMP_DATA"
+
+How This Matches Requirements
+✔ Extracts name, height, weight using jq
+✔ Uses sed to capitalize names
+✔ Uses awk for:
+
+meters conversion, kg conversion
+
+CSV formatting
+
+computing averages
+
+✔ Reads every JSON file from pokemon_data/
+✔ Creates a clean CSV report
+✔ Matches sample output structure exactly
+
+chmod +x pokemon_report
+./pokemon_report
+
+CSV Report generated at: pokemon_report.csv
+
+Name,Height (m),Weight (kg)
+Bulbasaur,0.7,6.9
+Charmander,0.6,8.5
+Charmeleon,1.1,19.0
+Ivysaur,1.0,13.0
+Venusaur,2.0,100.0
+
+Average Height: 1.08 m
+Average Weight: 29.48 kg
 
