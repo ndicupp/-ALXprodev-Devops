@@ -1,1 +1,586 @@
+#!/bin/bash
+# fetch_multiple_pokemon.sh - Batch retrieval with rate limiting
+# Retrieves data for multiple Pokémon and saves to separate files
 
+# ==================== CONFIGURATION ====================
+readonly POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+readonly DATA_DIR="pokemon_data"
+readonly API_BASE_URL="https://pokeapi.co/api/v2/pokemon"
+readonly DELAY_SECONDS=2  # Delay between requests to avoid rate limiting
+readonly MAX_RETRIES=3
+readonly TIMEOUT=30
+
+# ==================== FUNCTIONS ====================
+init_directories() {
+    echo "Initializing directories..."
+    mkdir -p "$DATA_DIR" || {
+        echo "Error: Failed to create directory '$DATA_DIR'" >&2
+        exit 1
+    }
+    echo "✅ Data directory ready: $DATA_DIR/"
+}
+
+validate_environment() {
+    # Check required tools
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is not installed. Please install curl first." >&2
+        exit 1
+    fi
+    
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Error: jq is not installed. Please install jq first." >&2
+        exit 1
+    fi
+    
+    # Test API connectivity
+    echo "Testing API connectivity..."
+    if ! curl -s -I "${API_BASE_URL}/pikachu" 2>/dev/null | grep -q "200 OK"; then
+        echo "Warning: Cannot verify API connectivity. Continuing anyway..." >&2
+    fi
+    echo "✅ Environment validated"
+}
+
+fetch_pokemon_data() {
+    local pokemon_name="$1"
+    local output_file="${DATA_DIR}/${pokemon_name}.json"
+    local retry_count=0
+    
+    echo -e "\n🔍 Fetching data for ${pokemon_name}..."
+    
+    while [ $retry_count -lt $MAX_RETRIES ]; do
+        # Make the API request with timeout
+        local http_code
+        http_code=$(curl -s \
+            -w "%{http_code}" \
+            -o "${output_file}.tmp" \
+            --max-time "$TIMEOUT" \
+            "${API_BASE_URL}/${pokemon_name}")
+        
+        local exit_status=$?
+        
+        # Check if request was successful
+        if [ $exit_status -eq 0 ] && [ "$http_code" -eq 200 ]; then
+            # Validate JSON
+            if jq empty "${output_file}.tmp" 2>/dev/null; then
+                mv "${output_file}.tmp" "$output_file"
+                echo "✅ Saved data to $output_file"
+                return 0
+            else
+                echo "  ⚠️  Invalid JSON received, retrying..." >&2
+            fi
+        else
+            # Handle different error types
+            if [ $exit_status -eq 28 ]; then
+                echo "  ⚠️  Request timeout, retrying..." >&2
+            elif [ "$http_code" -eq 429 ]; then
+                echo "  ⚠️  Rate limited, increasing delay and retrying..." >&2
+                sleep 5  # Extra delay for rate limiting
+            elif [ "$http_code" -eq 404 ]; then
+                echo "  ❌ Pokémon '${pokemon_name}' not found (404)" >&2
+                return 1
+            else
+                echo "  ⚠️  HTTP ${http_code}, retrying..." >&2
+            fi
+        fi
+        
+        ((retry_count++))
+        if [ $retry_count -lt $MAX_RETRIES ]; then
+            echo "  Retry attempt ${retry_count}/${MAX_RETRIES} in 1s..."
+            sleep 1
+        fi
+        
+        # Cleanup temp file
+        rm -f "${output_file}.tmp"
+    done
+    
+    echo "  ❌ Failed to fetch ${pokemon_name} after ${MAX_RETRIES} attempts" >&2
+    return 1
+}
+
+display_summary() {
+    echo -e "\n========================================"
+    echo "           FETCH SUMMARY"
+    echo "========================================"
+    
+    local total=${#POKEMON_LIST[@]}
+    local success_count=0
+    local failed_list=()
+    
+    # Count successful fetches
+    for pokemon in "${POKEMON_LIST[@]}"; do
+        if [ -f "${DATA_DIR}/${pokemon}.json" ]; then
+            ((success_count++))
+        else
+            failed_list+=("$pokemon")
+        fi
+    done
+    
+    echo "Total Pokémon:     $total"
+    echo "Successfully fetched: $success_count"
+    echo "Failed:            $((total - success_count))"
+    
+    if [ ${#failed_list[@]} -gt 0 ]; then
+        echo -e "\nFailed Pokémon:"
+        for failed in "${failed_list[@]}"; do
+            echo "  ❌ $failed"
+        done
+    fi
+    
+    if [ $success_count -gt 0 ]; then
+        echo -e "\n✅ Data saved in: $DATA_DIR/"
+        echo "   File sizes:"
+        for pokemon in "${POKEMON_LIST[@]}"; do
+            if [ -f "${DATA_DIR}/${pokemon}.json" ]; then
+                size=$(du -h "${DATA_DIR}/${pokemon}.json" | cut -f1)
+                lines=$(wc -l < "${DATA_DIR}/${pokemon}.json")
+                echo "   • ${pokemon}.json: $size, $lines lines"
+            fi
+        done
+    fi
+}
+
+# ==================== MAIN EXECUTION ====================
+main() {
+    echo "🚀 Task 2: Batch Pokémon Data Retrieval"
+    echo "========================================"
+    
+    # Initialize
+    init_directories
+    validate_environment
+    
+    local total=${#POKEMON_LIST[@]}
+    local current=1
+    
+    echo -e "\n📋 Pokémon to fetch:"
+    for pokemon in "${POKEMON_LIST[@]}"; do
+        echo "  $current. $pokemon"
+        ((current++))
+    done
+    
+    echo -e "\n⏳ Starting batch fetch (${DELAY_SECONDS}s delay between requests)...\n"
+    
+    # Process each Pokémon
+    current=1
+    for pokemon in "${POKEMON_LIST[@]}"; do
+        echo "(${current}/${total})"
+        
+        if fetch_pokemon_data "$pokemon"; then
+            # Success - add delay unless it's the last one
+            if [ $current -lt $total ]; then
+                echo "⏳ Waiting ${DELAY_SECONDS}s before next request..."
+                sleep "$DELAY_SECONDS"
+            fi
+        fi
+        
+        ((current++))
+    done
+    
+    # Display summary
+    display_summary
+    
+    echo -e "\n🎯 Task 2 completed!"
+}
+
+# Run main
+main "$@"
+
+
+#!/bin/bash
+# fetch_multiple_pokemon.sh - Minimal solution
+
+POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+DATA_DIR="pokemon_data"
+DELAY=2
+
+# Create directory
+mkdir -p "$DATA_DIR"
+
+for pokemon in "${POKEMON_LIST[@]}"; do
+    echo "Fetching data for $pokemon..."
+    
+    curl -s "https://pokeapi.co/api/v2/pokemon/$pokemon" \
+         -o "$DATA_DIR/$pokemon.json"
+    
+    if [ $? -eq 0 ] && [ -s "$DATA_DIR/$pokemon.json" ]; then
+        echo "Saved data to $DATA_DIR/$pokemon.json ✅"
+    else
+        echo "Failed to fetch $pokemon ❌"
+        rm -f "$DATA_DIR/$pokemon.json"
+    fi
+    
+    # Delay between requests (skip for last item)
+    [ "$pokemon" != "${POKEMON_LIST[-1]}" ] && sleep $DELAY
+done
+
+echo "Batch fetch completed!"
+
+
+#!/bin/bash
+# fetch_multiple_pokemon.sh - Advanced with parallel processing
+
+readonly POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+readonly DATA_DIR="pokemon_data"
+readonly CONCURRENT_LIMIT=2  # Process 2 at a time
+readonly DELAY_SECONDS=1
+
+# Create output directory
+mkdir -p "$DATA_DIR"
+
+# Function to fetch a single Pokémon
+fetch_single() {
+    local pokemon="$1"
+    local output_file="${DATA_DIR}/${pokemon}.json"
+    
+    echo "[$(date '+%H:%M:%S')] Starting: $pokemon"
+    
+    if curl -s -f --max-time 30 \
+        "https://pokeapi.co/api/v2/pokemon/$pokemon" \
+        -o "$output_file.tmp" 2>/dev/null; then
+        
+        # Validate JSON
+        if jq empty "$output_file.tmp" 2>/dev/null; then
+            mv "$output_file.tmp" "$output_file"
+            echo "[$(date '+%H:%M:%S')] ✅ Success: $pokemon"
+            return 0
+        fi
+    fi
+    
+    rm -f "$output_file.tmp"
+    echo "[$(date '+%H:%M:%S')] ❌ Failed: $pokemon"
+    return 1
+}
+
+# Export function for parallel processing
+export -f fetch_single
+export DATA_DIR
+
+echo "🚀 Starting parallel fetch (max $CONCURRENT_LIMIT concurrent)..."
+echo "=================================================="
+
+# Use xargs for parallel processing
+printf "%s\n" "${POKEMON_LIST[@]}" | \
+xargs -P $CONCURRENT_LIMIT -I {} \
+bash -c '
+    fetch_single "{}"
+    sleep '"$DELAY_SECONDS"'
+'
+
+echo -e "\n=================================================="
+echo "📊 Results:"
+echo "--------------------------------------------------"
+
+for pokemon in "${POKEMON_LIST[@]}"; do
+    if [ -f "${DATA_DIR}/${pokemon}.json" ]; then
+        size=$(du -h "${DATA_DIR}/${pokemon}.json" | cut -f1)
+        echo "✅ ${pokemon}.json ($size)"
+    else
+        echo "❌ ${pokemon}.json (failed)"
+    fi
+done
+
+echo "=================================================="
+
+
+#!/bin/bash
+# fetch_multiple_pokemon.sh - With visual progress bar
+
+POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+DATA_DIR="pokemon_data"
+DELAY=2
+TOTAL=${#POKEMON_LIST[@]}
+current=1
+
+# Function to show progress bar
+show_progress() {
+    local current=$1
+    local total=$2
+    local width=50
+    
+    local percent=$((current * 100 / total))
+    local filled=$((current * width / total))
+    local empty=$((width - filled))
+    
+    printf "\rProgress: ["
+    printf "%${filled}s" | tr ' ' '█'
+    printf "%${empty}s" | tr ' ' '░'
+    printf "] %d/%d (%d%%)" "$current" "$total" "$percent"
+}
+
+# Create directory
+mkdir -p "$DATA_DIR"
+
+echo "🔄 Fetching ${TOTAL} Pokémon..."
+echo "========================================"
+
+for pokemon in "${POKEMON_LIST[@]}"; do
+    show_progress $current $TOTAL
+    
+    echo -e "\n📥 Fetching: $pokemon"
+    
+    # Fetch data
+    if curl -s -f --max-time 30 \
+        "https://pokeapi.co/api/v2/pokemon/$pokemon" \
+        -o "${DATA_DIR}/${pokemon}.json.tmp" 2>/dev/null; then
+        
+        # Validate and save
+        if jq empty "${DATA_DIR}/${pokemon}.json.tmp" 2>/dev/null; then
+            mv "${DATA_DIR}/${pokemon}.json.tmp" "${DATA_DIR}/${pokemon}.json"
+            echo "  ✅ Saved: $pokemon.json"
+        else
+            echo "  ❌ Invalid JSON for $pokemon"
+            rm -f "${DATA_DIR}/${pokemon}.json.tmp"
+        fi
+    else
+        echo "  ❌ Failed to fetch $pokemon"
+    fi
+    
+    # Delay (except for last)
+    if [ $current -lt $TOTAL ]; then
+        echo "  ⏳ Waiting ${DELAY}s..."
+        sleep $DELAY
+    fi
+    
+    ((current++))
+done
+
+echo -e "\n========================================"
+echo "🎯 Completed! Files saved in: $DATA_DIR/"
+
+#!/bin/bash
+# fetch_multiple_pokemon.sh - Modular with config
+
+# Source configuration
+CONFIG_FILE="pokemon_fetch.conf"
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    # Default configuration
+    POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+    DATA_DIR="pokemon_data"
+    API_BASE="https://pokeapi.co/api/v2/pokemon"
+    REQUEST_DELAY=2
+    MAX_RETRIES=2
+fi
+
+# Load utility functions
+source utils.sh 2>/dev/null || {
+    log_error() { echo "[ERROR] $1" >&2; }
+    log_info() { echo "[INFO] $1"; }
+}
+
+# Main fetch function
+fetch_all_pokemon() {
+    local success_count=0
+    local fail_count=0
+    
+    # Create data directory
+    mkdir -p "$DATA_DIR" || {
+        log_error "Cannot create directory: $DATA_DIR"
+        return 1
+    }
+    
+    log_info "Starting batch fetch for ${#POKEMON_LIST[@]} Pokémon"
+    
+    for index in "${!POKEMON_LIST[@]}"; do
+        local pokemon="${POKEMON_LIST[$index]}"
+        local is_last=$((index == ${#POKEMON_LIST[@]} - 1))
+        
+        log_info "Processing: $pokemon ($((index + 1))/${#POKEMON_LIST[@]})"
+        
+        if fetch_pokemon "$pokemon"; then
+            ((success_count++))
+            
+            # Add delay if not last item
+            if [ $is_last -eq 0 ]; then
+                log_info "Waiting ${REQUEST_DELAY}s before next request..."
+                sleep "$REQUEST_DELAY"
+            fi
+        else
+            ((fail_count++))
+        fi
+    done
+    
+    # Print summary
+    echo "========================================"
+    echo "Batch fetch completed!"
+    echo "  Success: $success_count"
+    echo "  Failed:  $fail_count"
+    echo "  Total:   ${#POKEMON_LIST[@]}"
+    echo "========================================"
+    
+    return $((fail_count > 0 ? 1 : 0))
+}
+
+# Function to fetch single Pokémon
+fetch_pokemon() {
+    local name="$1"
+    local output_file="${DATA_DIR}/${name}.json"
+    local retry=0
+    
+    while [ $retry -lt $MAX_RETRIES ]; do
+        if curl -s -f --max-time 30 \
+            "${API_BASE}/${name}" \
+            -o "${output_file}.tmp" 2>/dev/null; then
+            
+            # Validate JSON
+            if jq empty "${output_file}.tmp" 2>/dev/null; then
+                mv "${output_file}.tmp" "$output_file"
+                log_info "✅ Saved: $name.json"
+                return 0
+            else
+                log_error "Invalid JSON for $name (attempt $((retry + 1)))"
+            fi
+        else
+            log_error "Failed to fetch $name (attempt $((retry + 1)))"
+        fi
+        
+        ((retry++))
+        [ $retry -lt $MAX_RETRIES ] && sleep 1
+    done
+    
+    rm -f "${output_file}.tmp"
+    log_error "❌ All attempts failed for $name"
+    return 1
+}
+
+# Main execution
+main() {
+    echo "Task 2: Batch Pokémon Data Retrieval"
+    echo "========================================"
+    
+    fetch_all_pokemon
+}
+
+# Run
+main "$@"
+
+#!/bin/bash
+# Configuration for Pokémon batch fetch
+
+POKEMON_LIST=("bulbasaur" "ivysaur" "venusaur" "charmander" "charmeleon")
+DATA_DIR="pokemon_data"
+API_BASE="https://pokeapi.co/api/v2/pokemon"
+REQUEST_DELAY=2  # seconds between requests
+MAX_RETRIES=3
+TIMEOUT=30
+
+#!/bin/bash
+# Utility functions for Pokémon fetch
+
+# Logging functions
+log_info() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $1"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >&2
+}
+
+log_success() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ✅ SUCCESS: $1"
+}
+
+# Validate JSON file
+validate_json() {
+    local file="$1"
+    jq empty "$file" >/dev/null 2>&1
+}
+
+# Create directory if it doesn't exist
+ensure_directory() {
+    local dir="$1"
+    mkdir -p "$dir" || {
+        log_error "Cannot create directory: $dir"
+        return 1
+    }
+    return 0
+}
+
+# Check internet connectivity
+check_connectivity() {
+    if curl -s --max-time 5 "https://pokeapi.co/api/v2/pokemon/pikachu" >/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+Option 1: Quick Start (Main Solution)
+# Make the script executable
+chmod +x fetch_multiple_pokemon.sh
+
+# Run it
+./fetch_multiple_pokemon.sh
+
+Option 2: Test with Sample Data
+# Create a test version
+cat > test_fetch.sh << 'EOF'
+#!/bin/bash
+# Test script with mock API calls
+
+POKEMON_LIST=("bulbasaur" "charmander")
+DATA_DIR="test_pokemon_data"
+mkdir -p "$DATA_DIR"
+
+for pokemon in "${POKEMON_LIST[@]}"; do
+    echo "Fetching data for $pokemon..."
+    
+    # Create mock JSON file
+    cat > "$DATA_DIR/$pokemon.json" << JSON
+{
+  "name": "$pokemon",
+  "id": 1,
+  "height": 7,
+  "weight": 69,
+  "types": [{"type": {"name": "grass"}}]
+}
+JSON
+    
+    echo "Saved data to $DATA_DIR/$pokemon.json ✅"
+    sleep 1
+done
+
+echo "Test completed! Check $DATA_DIR/"
+EOF
+
+chmod +x test_fetch.sh
+./test_fetch.sh
+
+Option 3: Direct Command Line
+# Quick one-liner for the required Pokémon
+mkdir -p pokemon_data && \
+for p in bulbasaur ivysaur venusaur charmander charmeleon; do
+    echo "Fetching $p..." && \
+    curl -s "https://pokeapi.co/api/v2/pokemon/$p" > "pokemon_data/$p.json" && \
+    echo "Saved: $p.json" && \
+    sleep 2
+done
+
+# Check all files were created
+ls -la pokemon_data/
+
+# Verify JSON is valid for each file
+for file in pokemon_data/*.json; do
+    echo "Checking $(basename $file)..."
+    jq empty "$file" && echo "✅ Valid" || echo "❌ Invalid"
+done
+
+# Display sample from bulbasaur.json as shown in requirements
+jq . < pokemon_data/bulbasaur.json | head -n 30
+
+Testing Edge Cases:
+# Test 1: Directory permissions
+chmod 000 pokemon_data 2>/dev/null
+./fetch_multiple_pokemon.sh  # Should show permission error
+
+# Test 2: Network failure (simulate by blocking API)
+# Run in terminal 1: sudo iptables -A OUTPUT -p tcp --dport 443 -j DROP
+# Run script - should show network errors
+# Cleanup: sudo iptables -D OUTPUT -p tcp --dport 443 -j DROP
+
+# Test 3: Invalid Pokémon names
+# Modify script to include "notapokemon" in list
+# Should handle 404 error gracefully
+
+# Test 4: Large batch
+# Create list of 20 Pokémon to test rate limiting
